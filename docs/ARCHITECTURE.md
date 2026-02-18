@@ -2,11 +2,21 @@
 
 ## Layers
 
-1. CLI layer
-2. Workflow layer (validation, queueing, retries)
-3. Adapter layer (UI automation/backend-specific control)
-4. Artifact layer (logs, outputs, metadata)
+1. CLI layer (`cli.py`)
+2. Task schema layer (`task.py`)
+3. Text processing layer (`dictionary.py`, `text.py`)
+4. Runner layer (`runner.py`)
+5. Artifact layer (`output/*.wav`, logs)
 
 ## Design Goal
 
-Keep adapter-specific fragility isolated from workflow logic so backend changes do not break task schema.
+Keep backend-specific fragility isolated from workflow logic so backend changes do not break task schema.
+
+## Current Flow
+
+1. Parse and validate JSON task.
+2. Load optional `.dic` dictionary set.
+3. Apply formula mode.
+4. Convert latin tokens with dictionary fallback.
+5. Split into chunk-sized utterances.
+6. Build and execute `voicepeak` commands (or print plan in dry-run).

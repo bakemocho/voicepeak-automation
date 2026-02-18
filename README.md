@@ -17,19 +17,20 @@ Current one-off scripts are brittle and hard to maintain. This repo rebuilds the
 - No autonomous browsing or background account actions.
 - Designed for local execution on your own machine.
 
-## Planned Capabilities
+## Current Capabilities
 
-- Task-runner: execute synthesis steps from JSON task files.
-- Watch mode: monitor task queue and process sequentially.
-- Adapter layer: separate app-control backend from workflow logic.
-- Export bridge: produce artifacts usable as LLM context.
+- Task schema validation (`validate`)
+- JSON task runner (`run` / `--dry-run`)
+- Dictionary-based alphabet-to-katakana conversion (`*.dic`)
+- Formula handling modes (`strip`, `keep`, `placeholder`)
+- Chunk splitting for long text
 
 ## Repository Layout
 
 - `src/voicepeak_automation/`: core package and CLI
 - `examples/`: sample task files
 - `docs/`: architecture and design notes
-- `tests/`: basic tests
+- `tests/`: automated tests
 
 ## Quick Start
 
@@ -39,8 +40,10 @@ source .venv/bin/activate
 pip install -e .
 
 voicepeak-automation validate examples/task.sample.json
-voicepeak-automation run --task examples/task.sample.json
+voicepeak-automation run --task examples/task.sample.json --dry-run
 ```
+
+Run without `--dry-run` when `voicepeak` is installed at your configured path.
 
 ## Legal
 

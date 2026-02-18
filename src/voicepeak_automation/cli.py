@@ -1,44 +1,38 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
+from voicepeak_automation.runner import RunResult, run_task
+from voicepeak_automation.task import TaskValidationError, parse_task
 
-def load_task(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    if not isinstance(data, dict):
-        raise ValueError("task file must be a JSON object")
-    return data
+
+def _format_run_summary(result: RunResult) -> str:
+    lines = [
+        f"project={result.task_project}",
+        f"dry_run={result.dry_run}",
+        f"chunks={len(result.chunk_results)}",
+    ]
+    for chunk in result.chunk_results:
+        lines.append(
+            f"- {chunk.item_id}#{chunk.chunk_index}: {chunk.output_wav}"
+        )
+    return "\n".join(lines)
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    path = Path(args.task)
-    if not path.exists():
-        raise FileNotFoundError(f"task file not found: {path}")
-
-    data = load_task(path)
-    required = ["project", "items"]
-    missing = [k for k in required if k not in data]
-    if missing:
-        raise ValueError(f"missing required keys: {', '.join(missing)}")
-
-    items = data.get("items")
-    if not isinstance(items, list) or len(items) == 0:
-        raise ValueError("items must be a non-empty list")
-
-    print(f"[ok] valid task: {path}")
-    print(f"project={data.get('project')} items={len(items)}")
+    task = parse_task(Path(args.task))
+    print(f"[ok] valid task: {task.source_path}")
+    print(f"project={task.project} items={len(task.items)}")
+    print(f"output_dir={task.settings.output_dir}")
+    print(f"formula_mode={task.settings.formula_mode}")
     return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    path = Path(args.task)
-    data = load_task(path)
-    print(f"[dry-run={args.dry_run}] run task: {path}")
-    print(f"project={data.get('project')} items={len(data.get('items', []))}")
-    print("runner implementation is pending")
+    task = parse_task(Path(args.task))
+    result = run_task(task=task, dry_run=bool(args.dry_run))
+    print(_format_run_summary(result))
     return 0
 
 
@@ -50,9 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("task", help="path to task json")
     validate.set_defaults(func=cmd_validate)
 
-    run = sub.add_parser("run", help="run task (currently stub)")
+    run = sub.add_parser("run", help="run synthesis task")
     run.add_argument("--task", required=True, help="path to task json")
-    run.add_argument("--dry-run", action="store_true", default=True)
+    run.add_argument("--dry-run", action="store_true", help="build chunk plan without invoking voicepeak")
     run.set_defaults(func=cmd_run)
 
     return parser
@@ -61,7 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return int(args.func(args))
+
+    try:
+        return int(args.func(args))
+    except (FileNotFoundError, TaskValidationError, RuntimeError, ValueError) as exc:
+        print(f"[error] {exc}")
+        return 1
 
 
 if __name__ == "__main__":
