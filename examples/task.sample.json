@@ -1,0 +1,10 @@
+{
+  "project": "demo",
+  "items": [
+    {
+      "id": "line-001",
+      "text": "This is a sample line.",
+      "speaker": "default"
+    }
+  ]
+}
