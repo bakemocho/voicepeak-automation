@@ -24,6 +24,7 @@ Current one-off scripts are brittle and hard to maintain. This repo rebuilds the
 - Dictionary-based alphabet-to-katakana conversion (`*.dic`)
 - Formula handling modes (`strip`, `keep`, `placeholder`)
 - Chunk splitting for long text
+- Voicepeak safety guards (narrator/emotion preflight, clamping, timeout, fail-and-skip)
 
 ## Repository Layout
 
@@ -49,3 +50,7 @@ Run without `--dry-run` when `voicepeak` is installed at your configured path.
 
 - License: MIT (`LICENSE`)
 - Legal notice: `LEGAL.md`
+
+## Behavior Notes
+
+- Voicepeak probing notes: `docs/VOICEPEAK_BEHAVIOR.md`

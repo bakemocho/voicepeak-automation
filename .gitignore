@@ -16,6 +16,7 @@ venv/
 run/
 logs/
 output/
+tmp/
 
 # IDE
 .vscode/

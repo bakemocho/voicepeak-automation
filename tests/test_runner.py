@@ -38,6 +38,8 @@ class RunnerTest(unittest.TestCase):
             self.assertEqual(result.task_project, "dry-run-test")
             self.assertTrue(result.dry_run)
             self.assertGreater(len(result.chunk_results), 1)
+            self.assertEqual(result.warnings, [])
+            self.assertEqual(result.errors, [])
             self.assertTrue(output_dir.exists())
             self.assertFalse(any(output_dir.glob("*.wav")))
 

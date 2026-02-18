@@ -12,11 +12,21 @@ def _format_run_summary(result: RunResult) -> str:
         f"project={result.task_project}",
         f"dry_run={result.dry_run}",
         f"chunks={len(result.chunk_results)}",
+        f"warnings={len(result.warnings)}",
+        f"errors={len(result.errors)}",
     ]
     for chunk in result.chunk_results:
         lines.append(
             f"- {chunk.item_id}#{chunk.chunk_index}: {chunk.output_wav}"
         )
+    if result.warnings:
+        lines.append("[warnings]")
+        for warning in result.warnings:
+            lines.append(f"- {warning}")
+    if result.errors:
+        lines.append("[errors]")
+        for error in result.errors:
+            lines.append(f"- {error}")
     return "\n".join(lines)
 
 
@@ -33,6 +43,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     task = parse_task(Path(args.task))
     result = run_task(task=task, dry_run=bool(args.dry_run))
     print(_format_run_summary(result))
+    if result.errors:
+        return 2
     return 0
 
 

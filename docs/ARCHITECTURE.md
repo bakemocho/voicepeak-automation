@@ -7,6 +7,7 @@
 3. Text processing layer (`dictionary.py`, `text.py`)
 4. Runner layer (`runner.py`)
 5. Artifact layer (`output/*.wav`, logs)
+6. Safety layer (parameter preflight, clamping, timeout, fail-and-skip)
 
 ## Design Goal
 
@@ -20,3 +21,11 @@ Keep backend-specific fragility isolated from workflow logic so backend changes 
 4. Convert latin tokens with dictionary fallback.
 5. Split into chunk-sized utterances.
 6. Build and execute `voicepeak` commands (or print plan in dry-run).
+
+## Runtime Safety
+
+- Validate narrator against `--list-narrator`.
+- Validate emotion keys against `--list-emotion <narrator>`.
+- Clamp speed to safe range.
+- Wrap subprocess calls with timeout.
+- Record synthesis failure per chunk and continue with next chunk.
