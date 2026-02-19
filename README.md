@@ -26,6 +26,13 @@ Current one-off scripts are brittle and hard to maintain. This repo rebuilds the
 - Chunk splitting for long text
 - Voicepeak safety guards (narrator/emotion preflight, clamping, timeout, fail-and-skip)
 
+## Dictionary License Policy
+
+- This project supports optional user-provided `*.dic` files.
+- This repository does not bundle or auto-download third-party pronunciation dictionaries.
+- If you use external dictionary data (for example, BEP-derived files), you are responsible for acquisition and license compliance.
+- Before redistribution, commercial use, or bundled delivery, confirm that your selected dictionary license is compatible with your distribution model.
+
 ## Repository Layout
 
 - `src/voicepeak_automation/`: core package and CLI
