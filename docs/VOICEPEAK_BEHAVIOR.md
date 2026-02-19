@@ -65,7 +65,7 @@ Crash reports in `~/Library/Logs/DiagnosticReports` matched this:
 
 ## Safeguards Added in This Repo
 
-Implemented in `/Users/bakemocho/gitwork_bk/voicepeak-automation/src/voicepeak_automation/runner.py`:
+Implemented in `src/voicepeak_automation/runner.py`:
 
 - Preflight narrator validation via `--list-narrator`.
 - Preflight emotion key validation via `--list-emotion <narrator>`.
