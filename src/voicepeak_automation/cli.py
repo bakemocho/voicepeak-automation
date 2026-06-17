@@ -3,6 +3,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from voicepeak_automation.dic import (
+    DEFAULT_DIC_PATH,
+    DicEntry,
+    DicError,
+    add_entry,
+    load_dic,
+    remove_entry,
+    save_dic,
+    validate_entry,
+)
 from voicepeak_automation.runner import RunResult, run_task
 from voicepeak_automation.task import TaskValidationError, parse_task
 
@@ -48,6 +58,76 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dic_list(args: argparse.Namespace) -> int:
+    path = Path(args.dic_path) if args.dic_path else DEFAULT_DIC_PATH
+    entries = load_dic(path)
+    if not entries:
+        print(f"[ok] dic empty: {path}")
+        return 0
+    print(f"[ok] {len(entries)} entries: {path}")
+    for e in entries:
+        errors = validate_entry(e)
+        flag = " [WARN:" + ",".join(errors) + "]" if errors else ""
+        print(f"  sur={e.sur!r} pron={e.pron!r} pos={e.pos} accent={e.accentType}{flag}")
+    return 0
+
+
+def cmd_dic_add(args: argparse.Namespace) -> int:
+    path = Path(args.dic_path) if args.dic_path else DEFAULT_DIC_PATH
+    entry = DicEntry(
+        sur=args.sur,
+        pron=args.pron,
+        pos=args.pos,
+        priority=args.priority,
+        accentType=args.accent_type,
+        lang="ja",
+    )
+    errors = validate_entry(entry)
+    if errors:
+        for e in errors:
+            print(f"[error] {e}")
+        return 1
+    entries = load_dic(path)
+    entries, replaced = add_entry(entries, entry)
+    save_dic(entries, path)
+    action = "replaced" if replaced else "added"
+    print(f"[ok] {action}: sur={entry.sur!r} pron={entry.pron!r} accent={entry.accentType}")
+    print("note: restart VOICEPEAK to apply changes")
+    return 0
+
+
+def cmd_dic_remove(args: argparse.Namespace) -> int:
+    path = Path(args.dic_path) if args.dic_path else DEFAULT_DIC_PATH
+    entries = load_dic(path)
+    entries, found = remove_entry(entries, args.sur)
+    if not found:
+        print(f"[warn] not found: sur={args.sur!r}")
+        return 1
+    save_dic(entries, path)
+    print(f"[ok] removed: sur={args.sur!r}")
+    print("note: restart VOICEPEAK to apply changes")
+    return 0
+
+
+def cmd_dic_validate(args: argparse.Namespace) -> int:
+    path = Path(args.dic_path) if args.dic_path else DEFAULT_DIC_PATH
+    try:
+        entries = load_dic(path)
+    except DicError as exc:
+        print(f"[error] {exc}")
+        return 1
+    issues: list[str] = []
+    for e in entries:
+        for err in validate_entry(e):
+            issues.append(f"sur={e.sur!r}: {err}")
+    if issues:
+        for issue in issues:
+            print(f"[warn] {issue}")
+        return 1
+    print(f"[ok] {len(entries)} entries valid: {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voicepeak-automation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -60,6 +140,32 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--task", required=True, help="path to task json")
     run.add_argument("--dry-run", action="store_true", help="build chunk plan without invoking voicepeak")
     run.set_defaults(func=cmd_run)
+
+    _dic_path_kwargs = dict(default=None, metavar="PATH", help="path to dic.json (default: VOICEPEAK settings)")
+
+    dic_list = sub.add_parser("dic-list", help="list user dictionary entries")
+    dic_list.add_argument("--dic-path", **_dic_path_kwargs)
+    dic_list.set_defaults(func=cmd_dic_list)
+
+    dic_add = sub.add_parser("dic-add", help="add or replace a user dictionary entry")
+    dic_add.add_argument("--sur", required=True, help="surface form (the word as written)")
+    dic_add.add_argument("--pron", required=True, help="katakana reading")
+    dic_add.add_argument("--accent-type", required=True, type=int, metavar="N",
+                         help="pitch accent nucleus position (0=flat, 1=drop after 1st mora, …)")
+    dic_add.add_argument("--pos", default="Japanese_Koyuumeishi_ippan",
+                         help="part of speech (default: Japanese_Koyuumeishi_ippan)")
+    dic_add.add_argument("--priority", type=int, default=5, metavar="N", help="priority 1-9 (default: 5)")
+    dic_add.add_argument("--dic-path", **_dic_path_kwargs)
+    dic_add.set_defaults(func=cmd_dic_add)
+
+    dic_remove = sub.add_parser("dic-remove", help="remove a user dictionary entry by sur")
+    dic_remove.add_argument("--sur", required=True, help="surface form to remove")
+    dic_remove.add_argument("--dic-path", **_dic_path_kwargs)
+    dic_remove.set_defaults(func=cmd_dic_remove)
+
+    dic_validate = sub.add_parser("dic-validate", help="validate all entries in dic.json")
+    dic_validate.add_argument("--dic-path", **_dic_path_kwargs)
+    dic_validate.set_defaults(func=cmd_dic_validate)
 
     return parser
 
