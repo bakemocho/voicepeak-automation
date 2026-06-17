@@ -66,25 +66,25 @@ def merge_wavs(
     chunk_paths: list[Path],
     sr: int,
     crossfade_ms: int,
-    gap_ms: int = 0,
+    gaps_ms: list[int] | None = None,
 ) -> np.ndarray:
     """Crossfade-merge pre-trimmed chunk WAVs into a single array.
 
-    gap_ms: silence inserted between chunks (before crossfade).
-    When gap_ms > 0, silence is appended to each chunk before the next
-    chunk blends in via crossfade.
+    gaps_ms: per-chunk silence in ms appended after each chunk (before crossfade).
+    Length must be len(chunk_paths) - 1; the last element (after final chunk) is ignored.
+    Pass None or empty list for no gaps.
     """
     arrays = []
     for p in chunk_paths:
         y, _ = librosa.load(str(p), sr=sr, mono=True)
         arrays.append(y)
 
-    gap = np.zeros(int(gap_ms / 1000 * sr), dtype=np.float32)
-
     merged = arrays[0]
-    for nxt in arrays[1:]:
-        if len(gap) > 0:
-            merged = np.concatenate([merged, gap])
+    for i, nxt in enumerate(arrays[1:]):
+        gap_ms = gaps_ms[i] if gaps_ms and i < len(gaps_ms) else 0
+        if gap_ms > 0:
+            silence = np.zeros(int(gap_ms / 1000 * sr), dtype=np.float32)
+            merged = np.concatenate([merged, silence])
         merged = _crossfade(merged, nxt, sr, crossfade_ms)
     return merged
 
@@ -199,13 +199,19 @@ def main() -> int:
         print(f"[{i+1:03d}] ok  {wav.name}  {text[:40]!r}  ({record['duration_s']}s)")
 
     # --- Merge ---
+    # Per-chunk gaps: prefer gap_after_ms from JSON, fall back to --gap-ms flag
+    chunk_gaps = [
+        chunks[i].get("gap_after_ms", args.gap_ms)
+        for i in range(len(chunk_wavs) - 1)
+    ]
+
     if len(chunk_wavs) >= 2:
         sr = sr_detected or 44100
-        merged = merge_wavs(chunk_wavs, sr, args.crossfade_ms, args.gap_ms)
+        merged = merge_wavs(chunk_wavs, sr, args.crossfade_ms, chunk_gaps)
         merged_path = args.out_dir / "merged.wav"
         sf.write(str(merged_path), merged, sr)
-        gap_info = f", gap={args.gap_ms}ms" if args.gap_ms else ""
-        print(f"\nmerged → {merged_path}  ({len(merged)/sr:.2f}s, crossfade={args.crossfade_ms}ms{gap_info})")
+        gap_summary = "/".join(str(g) for g in chunk_gaps) + "ms" if chunk_gaps else "0ms"
+        print(f"\nmerged → {merged_path}  ({len(merged)/sr:.2f}s, crossfade={args.crossfade_ms}ms, gaps={gap_summary})")
         if args.play:
             import subprocess
             subprocess.run(["afplay", str(merged_path)])
