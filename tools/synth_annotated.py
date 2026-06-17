@@ -106,6 +106,7 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory for WAVs")
     parser.add_argument("--narrator", default="Koharu Rikka", help="VOICEPEAK narrator")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without synthesizing")
+    parser.add_argument("--play", action="store_true", help="Play each WAV with afplay after synthesis")
     args = parser.parse_args()
 
     if args.annotations:
@@ -151,6 +152,8 @@ def main() -> int:
                 sys.stderr.write(f"[FAIL] {i+1:03d}: {text!r}\n")
             else:
                 print(f"[{i+1:03d}] {status}  {wav.name}  {text[:40]!r}")
+                if args.play:
+                    subprocess.run(["afplay", str(wav)])
             record = {"index": i + 1, "text": text, "wav": str(wav), "status": status}
 
         if em_arg:

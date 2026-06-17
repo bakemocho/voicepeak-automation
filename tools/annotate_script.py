@@ -36,6 +36,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from voicepeak_automation.text_normalizer import normalize as _normalize_text
+
 # Emotion labels supported by VOICEPEAK Koharu Rikka.
 # Each value is a float 0.0–1.0.
 VOICEPEAK_EMOTIONS = ["happy", "sad", "angry", "calm"]
@@ -194,6 +197,9 @@ def main() -> int:
     if not sentences:
         print("[]")
         return 0
+
+    # Pre-normalize numbers/units so LLM sees readable Japanese
+    sentences = [_normalize_text(s) for s in sentences]
 
     if args.dry_run:
         result = annotate_dry_run(sentences)
