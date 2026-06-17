@@ -59,6 +59,11 @@ from irodori_tts.inference_runtime import (
 def main() -> int:
     task = json.loads(sys.stdin.read())
 
+    # Irodori prints diagnostic messages to stdout; redirect to stderr so our
+    # JSON result can be cleanly parsed by the parent process.
+    _real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
     checkpoint_repo = task.get("checkpoint", "Aratako/Irodori-TTS-500M-v3")
     codec_repo = task.get("codec_repo", "Aratako/Semantic-DACVAE-Japanese-32dim")
     device = task.get("device", default_runtime_device())
@@ -131,7 +136,6 @@ def main() -> int:
                     cfg_scale_caption=cfg_scale_caption_resolved,
                     cfg_scale_speaker=cfg_scale_speaker_resolved,
                     seed=seed,
-                    temperature=1.0,
                 )
             )
             save_wav(out_wav, result.audio, result.sample_rate)
@@ -148,6 +152,7 @@ def main() -> int:
             print(f"[runner] FAIL {text!r}: {exc}", file=sys.stderr)
             results.append({"text": text, "out_wav": out_wav, "ok": False, "error": str(exc)})
 
+    sys.stdout = _real_stdout
     print(json.dumps(results, ensure_ascii=False))
     return 0
 
