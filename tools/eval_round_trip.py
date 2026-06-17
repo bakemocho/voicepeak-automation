@@ -76,8 +76,9 @@ def transcribe(wav_path: Path, out_dir: Path) -> str | None:
 
 def _try_score(wav_path: Path) -> dict | None:
     """Run score_wav via subprocess using .venv-eval python. Returns dict or None."""
-    venv_python = Path(__file__).parent.parent / ".venv-eval" / "bin" / "python"
-    score_script = Path(__file__).parent / "score_wav.py"
+    here = Path(__file__).resolve().parent
+    venv_python = here.parent / ".venv-eval" / "bin" / "python"
+    score_script = here / "score_wav.py"
     if not venv_python.exists() or not score_script.exists():
         return None
     proc = subprocess.run(
@@ -89,8 +90,13 @@ def _try_score(wav_path: Path) -> dict | None:
     )
     if proc.returncode != 0:
         return None
+    stdout = proc.stdout
+    idx = stdout.find("{")
+    if idx == -1:
+        return None
     try:
-        return json.loads(proc.stdout.strip())
+        obj, _ = json.JSONDecoder().raw_decode(stdout, idx)
+        return obj
     except json.JSONDecodeError:
         return None
 
