@@ -22,3 +22,4 @@ tmp/
 # IDE
 .vscode/
 .idea/
+.venv-eval/
