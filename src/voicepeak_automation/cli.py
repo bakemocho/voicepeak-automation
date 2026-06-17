@@ -15,6 +15,7 @@ from voicepeak_automation.dic import (
 )
 from voicepeak_automation.runner import RunResult, run_task
 from voicepeak_automation.task import TaskValidationError, parse_task
+from voicepeak_automation.vpp import VppParams, generate_vpp, write_vpp
 
 
 def _format_run_summary(result: RunResult) -> str:
@@ -128,6 +129,46 @@ def cmd_dic_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vpp_generate(args: argparse.Namespace) -> int:
+    text = args.text or (Path(args.text_file).read_text(encoding="utf-8") if args.text_file else None)
+    if not text:
+        print("[error] provide --text or --text-file")
+        return 1
+
+    params = VppParams(
+        narrator=args.narrator,
+        speed=args.speed,
+        pitch=args.pitch,
+        pause_scale=args.pause_scale,
+        comma_pause_d=args.comma_pause,
+        period_pause_d=args.period_pause,
+    )
+
+    dic_path = Path(args.dic_path) if args.dic_path else None
+    data = generate_vpp(text, params=params, **({"dic_path": dic_path} if dic_path else {}))
+
+    out = Path(args.output)
+    write_vpp(data, out)
+    n_blocks = len(data["project"]["blocks"])
+    n_sents = sum(len(b["sentence-list"]) for b in data["project"]["blocks"])
+    print(f"[ok] wrote {out} ({n_blocks} block, {n_sents} sentences)")
+    print("note: open in VOICEPEAK GUI to synthesize and export audio")
+    return 0
+
+
+def cmd_vpp_synth(args: argparse.Namespace) -> int:
+    from voicepeak_automation.synth import synthesize_vpp
+    vpp_path = Path(args.vpp)
+    output_dir = Path(args.output_dir)
+    try:
+        synthesize_vpp(vpp_path, output_dir, timeout=args.timeout)
+        print(f"[ok] export triggered → {output_dir}")
+    except Exception as exc:
+        print(f"[error] {exc}")
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voicepeak-automation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -166,6 +207,27 @@ def build_parser() -> argparse.ArgumentParser:
     dic_validate = sub.add_parser("dic-validate", help="validate all entries in dic.json")
     dic_validate.add_argument("--dic-path", **_dic_path_kwargs)
     dic_validate.set_defaults(func=cmd_dic_validate)
+
+    vpp_gen = sub.add_parser("vpp-generate", help="generate a .vpp project file from Japanese text")
+    vpp_gen.add_argument("--text", default=None, help="text to synthesize (inline)")
+    vpp_gen.add_argument("--text-file", default=None, metavar="FILE", help="read text from file")
+    vpp_gen.add_argument("--output", required=True, metavar="FILE.vpp", help="output .vpp path")
+    vpp_gen.add_argument("--narrator", default="Koharu Rikka", help="narrator name (default: Koharu Rikka)")
+    vpp_gen.add_argument("--speed", type=float, default=1.0, help="speed multiplier 0.5-2.0 (default: 1.0)")
+    vpp_gen.add_argument("--pitch", type=float, default=0.0, help="pitch shift (default: 0.0)")
+    vpp_gen.add_argument("--pause-scale", type=float, default=1.0, help="global pause scale (default: 1.0)")
+    vpp_gen.add_argument("--comma-pause", type=float, default=1.0, metavar="D",
+                         help="pause duration multiplier at 、 (default: 1.0)")
+    vpp_gen.add_argument("--period-pause", type=float, default=1.5, metavar="D",
+                         help="pause duration multiplier at 。 (default: 1.5)")
+    vpp_gen.add_argument("--dic-path", **_dic_path_kwargs)
+    vpp_gen.set_defaults(func=cmd_vpp_generate)
+
+    vpp_synth = sub.add_parser("vpp-synth", help="open .vpp in VOICEPEAK GUI and trigger export (macOS only)")
+    vpp_synth.add_argument("--vpp", required=True, metavar="FILE.vpp", help="input .vpp path")
+    vpp_synth.add_argument("--output-dir", required=True, metavar="DIR", help="export output directory")
+    vpp_synth.add_argument("--timeout", type=int, default=60, help="seconds to wait for export (default: 60)")
+    vpp_synth.set_defaults(func=cmd_vpp_synth)
 
     return parser
 
