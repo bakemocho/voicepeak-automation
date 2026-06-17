@@ -291,7 +291,26 @@ def main() -> int:
             oracle_results.extend(res)
     else:
         task = _build_task(chunks, oracle_dir, args.oracle_mode, args.num_steps, args.seed)
-        oracle_results = _run_irodori_batch(task)
+
+        # When --full-oracle is requested, append full-text chunk to the same batch
+        # so model loads only once (MPS is freed after a single subprocess call).
+        full_wav = oracle_dir / "full_oracle.wav"
+        if args.full_oracle and len(chunks) > 1:
+            full_text = "".join(e["text"] for e in chunks)
+            full_task_chunk = {"text": full_text, "out_wav": str(full_wav)}
+            first_caption = chunks[0].get("oracle_caption")
+            if first_caption:
+                full_task_chunk["caption"] = first_caption
+            task = {**task, "chunks": task["chunks"] + [full_task_chunk]}
+
+        all_results = _run_irodori_batch(task)
+        # Last result is full-oracle if requested; rest are per-chunk
+        if args.full_oracle and len(chunks) > 1:
+            oracle_results = all_results[: len(chunks)]
+            full_oracle_result = all_results[len(chunks)] if len(all_results) > len(chunks) else None
+        else:
+            oracle_results = all_results
+            full_oracle_result = None
 
     # --- Extract F0 stats from oracle WAVs ---
     stats_list = []
@@ -307,22 +326,10 @@ def main() -> int:
     valid_midis = [s["f0_median_midi"] for s in stats_list if "f0_median_midi" in s]
     global_f0_midi = float(np.median(valid_midis)) if valid_midis else librosa.hz_to_midi(150.0)
 
-    # --- Full-oracle pass: synthesize entire text, derive gaps via stable-ts ---
+    # --- Derive gaps from full-oracle WAV (same batch, already synthesized above) ---
     oracle_gaps: list[int] | None = None
     if args.full_oracle and len(chunks) > 1:
-        sys.stderr.write("[oracle] full-oracle pass: synthesizing complete text...\n")
-        full_text = "".join(e["text"] for e in chunks)
-        full_wav = oracle_dir / "full_oracle.wav"
-        full_caption = chunks[0].get("oracle_caption")  # use first chunk caption if set
-        full_task_chunk = {"text": full_text, "out_wav": str(full_wav)}
-        if full_caption:
-            full_task_chunk["caption"] = full_caption
-
-        base_task = _build_task(chunks, oracle_dir, args.oracle_mode, args.num_steps, args.seed)
-        full_task = {**base_task, "chunks": [full_task_chunk]}
-        full_res = _run_irodori_batch(full_task)
-
-        if full_res and full_res[0].get("ok"):
+        if full_oracle_result and full_oracle_result.get("ok"):
             oracle_gaps = _derive_gaps_from_full_oracle(full_wav, len(chunks))
             sys.stderr.write(f"[oracle] gaps from full oracle: {oracle_gaps}\n")
         else:
