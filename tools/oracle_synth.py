@@ -128,14 +128,28 @@ def _extract_f0_stats(wav_path: Path) -> dict:
 
 
 def _f0_to_voicepeak_params(
-    stats: dict, global_f0_median_midi: float, base_emotion_type: str
+    stats: dict,
+    global_f0_median_midi: float,
+    base_emotion_type: str,
+    f0_range_max: float | None = None,
+    emotion_floor: float = 0.0,
 ) -> dict:
-    """Map oracle F0 stats to VOICEPEAK annotation params."""
+    """Map oracle F0 stats to VOICEPEAK annotation params.
+
+    f0_range_max: when set, normalizes relative to this max (--f0-relative).
+    emotion_floor: minimum intensity after normalization (--emotion-floor).
+    """
     f0_range = stats.get("f0_range_st", 0.0)
     f0_midi = stats.get("f0_median_midi", global_f0_median_midi)
 
-    # emotion intensity: F0 range normalized, saturates at _F0_RANGE_SATURATE_ST
-    intensity = min(f0_range / _F0_RANGE_SATURATE_ST, 1.0)
+    if f0_range_max is not None and f0_range_max > 0:
+        # Relative: scale to [emotion_floor, 1.0] proportional to max range
+        relative = f0_range / f0_range_max
+        intensity = emotion_floor + (1.0 - emotion_floor) * relative
+    else:
+        # Absolute: saturates at _F0_RANGE_SATURATE_ST, then apply floor
+        intensity = min(f0_range / _F0_RANGE_SATURATE_ST, 1.0)
+        intensity = max(intensity, emotion_floor)
 
     # pitch offset: semitone deviation from global median, capped at ±_PITCH_SCALE_ST
     pitch_dev_st = f0_midi - global_f0_median_midi
@@ -230,6 +244,10 @@ def main() -> int:
     parser.add_argument("--narrator", default="Koharu Rikka",
                         help="VOICEPEAK narrator (for voicepeak mode baseline)")
     parser.add_argument("--out", type=Path, help="Output JSON path (default: stdout)")
+    parser.add_argument("--f0-relative", action="store_true",
+                        help="Normalize F0 range relative to chunk max (prevents saturation)")
+    parser.add_argument("--emotion-floor", type=float, default=0.0, metavar="F",
+                        help="Minimum emotion intensity [0,1] applied after normalization (default: 0)")
     parser.add_argument("--full-oracle", action="store_true",
                         help="Also synthesize full sentence as one Irodori pass; use stable-ts "
                              "to derive gap_after_ms from silence at chunk boundaries")
@@ -336,10 +354,19 @@ def main() -> int:
             sys.stderr.write("[oracle] full-oracle synthesis failed, using MeCab gaps\n")
 
     # --- Map to VOICEPEAK params and build output ---
+    f0_range_max: float | None = None
+    if args.f0_relative:
+        ranges = [s.get("f0_range_st", 0.0) for s in stats_list]
+        f0_range_max = max(ranges) if ranges else None
+        sys.stderr.write(
+            f"[oracle] f0-relative: max_range={f0_range_max:.2f}st, "
+            f"floor={args.emotion_floor}\n"
+        )
+
     result_chunks = []
     for i, (entry, stats) in enumerate(zip(chunks, stats_list)):
         updated = dict(entry)
-        vp_params = _f0_to_voicepeak_params(stats, global_f0_midi, args.emotion_type)
+        vp_params = _f0_to_voicepeak_params(stats, global_f0_midi, args.emotion_type, f0_range_max=f0_range_max, emotion_floor=args.emotion_floor)
 
         # Override emotion intensity; keep user-set type if different from emotion_type
         updated["emotion"] = vp_params["emotion"]
