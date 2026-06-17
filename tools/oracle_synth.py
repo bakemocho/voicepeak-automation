@@ -50,6 +50,62 @@ _F0_RANGE_SATURATE_ST = 10.0   # semitone range → emotion 1.0
 _PITCH_SCALE_ST = 3.0           # ±3 st deviation caps pitch at ±1.0
 
 
+def _derive_gaps_from_full_oracle(full_wav: Path, n_chunks: int) -> list[int]:
+    """Detect silence gaps between speech segments in full oracle WAV.
+
+    Uses librosa.effects.split() to find non-silent intervals. The gaps
+    between the first n_chunks speech segments map to gap_after_ms values.
+    Works on clean TTS audio without needing ASR or word alignment.
+    """
+    y, sr = librosa.load(str(full_wav), sr=None, mono=True)
+    # non_silent_intervals: array of [start_sample, end_sample]
+    intervals = librosa.effects.split(y, top_db=35)
+
+    if len(intervals) < 2:
+        sys.stderr.write("[oracle] full-oracle: fewer than 2 speech segments found\n")
+        return [200] * (n_chunks - 1)
+
+    gaps = []
+    for i in range(min(len(intervals) - 1, n_chunks - 1)):
+        gap_samples = intervals[i + 1][0] - intervals[i][1]
+        gap_ms = int(gap_samples / sr * 1000)
+        gap_ms = max(50, min(gap_ms, 1000))
+        gaps.append(gap_ms)
+        t_end = intervals[i][1] / sr
+        t_start_next = intervals[i + 1][0] / sr
+        sys.stderr.write(
+            f"  [gap] speech[{i}] ends {t_end:.2f}s → speech[{i+1}] starts {t_start_next:.2f}s"
+            f" = {gap_ms}ms\n"
+        )
+
+    # Pad with fallback if fewer gaps than needed
+    while len(gaps) < n_chunks - 1:
+        gaps.append(200)
+
+    return gaps
+
+
+def _extract_f0_stats_window(y: np.ndarray, sr: int, start_s: float, end_s: float) -> dict:
+    """Extract F0 stats from a time window of a loaded audio array."""
+    s = int(start_s * sr)
+    e = int(end_s * sr)
+    segment = y[s:e]
+    if len(segment) < sr * 0.1:
+        return {"f0_median_hz": 150.0, "f0_range_st": 0.0}
+    f0, voiced_flag, _ = librosa.pyin(
+        segment, fmin=librosa.note_to_hz("C2"), fmax=librosa.note_to_hz("C7"), sr=sr
+    )
+    voiced_f0 = f0[voiced_flag & ~np.isnan(f0)]
+    if len(voiced_f0) < 3:
+        return {"f0_median_hz": 150.0, "f0_range_st": 0.0}
+    f0_midi = librosa.hz_to_midi(voiced_f0)
+    return {
+        "f0_median_hz": float(np.median(voiced_f0)),
+        "f0_median_midi": float(np.median(f0_midi)),
+        "f0_range_st": float(f0_midi.max() - f0_midi.min()),
+    }
+
+
 def _extract_f0_stats(wav_path: Path) -> dict:
     """Extract voiced F0 median, range, and RMS from a WAV file."""
     y, sr = librosa.load(str(wav_path), sr=None, mono=True)
@@ -116,10 +172,18 @@ def _build_task(
     seed: int,
 ) -> dict:
     """Build irodori_batch_runner task JSON for the given oracle mode."""
-    task_chunks = [
-        {"text": entry["text"], "out_wav": str(oracle_dir / f"oracle_{i+1:03d}.wav")}
-        for i, entry in enumerate(chunks)
-    ]
+    # Per-chunk captions via "oracle_caption" field in input JSON.
+    # For j11 mode: oracle_caption is appended to the J11 character description.
+    # For no-ref mode: oracle_caption replaces (or is used as) the caption.
+    task_chunks = []
+    for i, entry in enumerate(chunks):
+        chunk_task = {
+            "text": entry["text"],
+            "out_wav": str(oracle_dir / f"oracle_{i+1:03d}.wav"),
+        }
+        if "oracle_caption" in entry:
+            chunk_task["caption"] = entry["oracle_caption"]
+        task_chunks.append(chunk_task)
 
     if oracle_mode == "j11":
         return {
@@ -166,6 +230,9 @@ def main() -> int:
     parser.add_argument("--narrator", default="Koharu Rikka",
                         help="VOICEPEAK narrator (for voicepeak mode baseline)")
     parser.add_argument("--out", type=Path, help="Output JSON path (default: stdout)")
+    parser.add_argument("--full-oracle", action="store_true",
+                        help="Also synthesize full sentence as one Irodori pass; use stable-ts "
+                             "to derive gap_after_ms from silence at chunk boundaries")
     args = parser.parse_args()
 
     if args.chunks:
@@ -240,6 +307,27 @@ def main() -> int:
     valid_midis = [s["f0_median_midi"] for s in stats_list if "f0_median_midi" in s]
     global_f0_midi = float(np.median(valid_midis)) if valid_midis else librosa.hz_to_midi(150.0)
 
+    # --- Full-oracle pass: synthesize entire text, derive gaps via stable-ts ---
+    oracle_gaps: list[int] | None = None
+    if args.full_oracle and len(chunks) > 1:
+        sys.stderr.write("[oracle] full-oracle pass: synthesizing complete text...\n")
+        full_text = "".join(e["text"] for e in chunks)
+        full_wav = oracle_dir / "full_oracle.wav"
+        full_caption = chunks[0].get("oracle_caption")  # use first chunk caption if set
+        full_task_chunk = {"text": full_text, "out_wav": str(full_wav)}
+        if full_caption:
+            full_task_chunk["caption"] = full_caption
+
+        base_task = _build_task(chunks, oracle_dir, args.oracle_mode, args.num_steps, args.seed)
+        full_task = {**base_task, "chunks": [full_task_chunk]}
+        full_res = _run_irodori_batch(full_task)
+
+        if full_res and full_res[0].get("ok"):
+            oracle_gaps = _derive_gaps_from_full_oracle(full_wav, len(chunks))
+            sys.stderr.write(f"[oracle] gaps from full oracle: {oracle_gaps}\n")
+        else:
+            sys.stderr.write("[oracle] full-oracle synthesis failed, using MeCab gaps\n")
+
     # --- Map to VOICEPEAK params and build output ---
     result_chunks = []
     for i, (entry, stats) in enumerate(zip(chunks, stats_list)):
@@ -249,6 +337,10 @@ def main() -> int:
         # Override emotion intensity; keep user-set type if different from emotion_type
         updated["emotion"] = vp_params["emotion"]
         updated["pitch"] = vp_params["pitch"]
+
+        # Inject oracle-derived gap (overrides MeCab estimate when available)
+        if oracle_gaps and i < len(oracle_gaps):
+            updated["gap_after_ms"] = oracle_gaps[i]
 
         # Attach oracle diagnostics
         updated["_oracle"] = {

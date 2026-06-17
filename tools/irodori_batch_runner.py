@@ -118,11 +118,30 @@ def main() -> int:
         out_wav = chunk["out_wav"]
         Path(out_wav).parent.mkdir(parents=True, exist_ok=True)
 
+        # Per-chunk caption overrides global caption
+        chunk_caption = chunk.get("caption", caption)
+        use_caption = bool(
+            runtime.model_cfg.use_caption_condition
+            and chunk_caption is not None
+            and str(chunk_caption).strip() != ""
+        )
+        _, chunk_cfg_caption, chunk_cfg_speaker, _ = resolve_cfg_scales(
+            cfg_guidance_mode="standard",
+            cfg_scale_text=cfg_scale_text,
+            cfg_scale_caption=cfg_scale_caption,
+            cfg_scale_speaker=cfg_scale_speaker,
+            cfg_scale=None,
+            use_caption_condition=use_caption,
+            use_speaker_condition=use_speaker,
+        )
+        if chunk_caption != caption:
+            print(f"[runner] caption override: {chunk_caption!r}", file=sys.stderr)
+
         try:
             result = runtime.synthesize(
                 SamplingRequest(
                     text=text,
-                    caption=caption,
+                    caption=chunk_caption,
                     ref_wav=ref_wav,
                     ref_latent=None,
                     ref_embed=None,
@@ -133,8 +152,8 @@ def main() -> int:
                     num_steps=num_steps,
                     duration_scale=1.0,
                     cfg_scale_text=cfg_scale_text,
-                    cfg_scale_caption=cfg_scale_caption_resolved,
-                    cfg_scale_speaker=cfg_scale_speaker_resolved,
+                    cfg_scale_caption=chunk_cfg_caption,
+                    cfg_scale_speaker=chunk_cfg_speaker,
                     seed=seed,
                 )
             )
@@ -147,6 +166,7 @@ def main() -> int:
                 "ok": True,
                 "duration_sec": round(duration_sec, 3),
                 "sample_rate": result.sample_rate,
+                "caption_used": chunk_caption,
             })
         except Exception as exc:
             print(f"[runner] FAIL {text!r}: {exc}", file=sys.stderr)
