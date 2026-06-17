@@ -89,6 +89,60 @@ def merge_wavs(
     return merged
 
 
+
+def smooth_f0_boundaries(
+    wav_path: Path,
+    out_path: Path,
+    boundary_times_s: list[float],
+    window_ms: float = 80.0,
+) -> Path:
+    """Gaussian-smooth Praat pitch tier near chunk boundaries; resynthesize via overlap-add.
+
+    boundary_times_s: approximate timestamps (seconds) of chunk joins in merged audio.
+    window_ms: half-width of the smoothing window around each boundary.
+    Returns out_path.
+    """
+    import parselmouth
+    from parselmouth.praat import call
+    from scipy.ndimage import gaussian_filter1d
+
+    snd = parselmouth.Sound(str(wav_path))
+    manip = call(snd, "To Manipulation", 0.01, 75.0, 600.0)
+    pitch_tier = call(manip, "Extract pitch tier")
+
+    n = int(call(pitch_tier, "Get number of points"))
+    if n < 3:
+        import shutil as _shutil
+        _shutil.copy2(wav_path, out_path)
+        return out_path
+
+    times = np.array([call(pitch_tier, "Get time from index", i + 1) for i in range(n)])
+    freqs = np.array([call(pitch_tier, "Get value at index", i + 1) for i in range(n)])
+
+    smoothed = freqs.copy()
+    win_s = window_ms / 1000.0
+    for bt in boundary_times_s:
+        mask = np.abs(times - bt) < win_s
+        idx = np.where(mask)[0]
+        if len(idx) < 3:
+            continue
+        lo = max(0, idx[0] - 4)
+        hi = min(n, idx[-1] + 5)
+        dt_span = (times[hi - 1] - times[lo]) / max(1, hi - lo - 1)
+        sigma = (win_s * 0.5) / max(dt_span, 1e-6)
+        smoothed[lo:hi] = gaussian_filter1d(freqs[lo:hi].astype(float), sigma=max(1.0, sigma))
+
+    call(pitch_tier, "Remove points between",
+         float(times[0]) - 0.001, float(times[-1]) + 0.001)
+    for t, f in zip(times.tolist(), smoothed.tolist()):
+        call(pitch_tier, "Add point", t, f)
+
+    call([pitch_tier, manip], "Replace pitch tier")
+    result = call(manip, "Get resynthesis (overlap-add)")
+    result.save(str(out_path), "WAV")
+    return out_path
+
+
 def synthesize_baseline(
     chunks: list[dict],
     out_wav: Path,
@@ -119,6 +173,8 @@ def main() -> int:
                         help="Print synthesis commands without running VOICEPEAK")
     parser.add_argument("--play", action="store_true",
                         help="Play merged.wav with afplay after synthesis")
+    parser.add_argument("--f0-smooth", type=float, default=0.0, metavar="MS",
+                        help="F0 smoothing window half-width in ms around chunk boundaries (0=off)")
     args = parser.parse_args()
 
     if args.chunks:
@@ -212,7 +268,23 @@ def main() -> int:
         sf.write(str(merged_path), merged, sr)
         gap_summary = "/".join(str(g) for g in chunk_gaps) + "ms" if chunk_gaps else "0ms"
         print(f"\nmerged → {merged_path}  ({len(merged)/sr:.2f}s, crossfade={args.crossfade_ms}ms, gaps={gap_summary})")
-        if args.play:
+        if args.f0_smooth > 0:
+            smooth_path = args.out_dir / "merged_smooth.wav"
+            # Approximate boundary times: cumulative chunk durations + gaps - crossfade overlap
+            cursor = 0.0
+            btimes: list[float] = []
+            for ci, cwav in enumerate(chunk_wavs[:-1]):
+                dur = len(librosa.load(str(cwav), sr=sr, mono=True)[0]) / sr
+                cursor += dur
+                btimes.append(cursor)
+                cursor += chunk_gaps[ci] / 1000.0 if ci < len(chunk_gaps) else 0.0
+                cursor -= args.crossfade_ms / 1000.0
+            smooth_f0_boundaries(merged_path, smooth_path, btimes, window_ms=args.f0_smooth)
+            print(f"f0-smooth → {smooth_path}  (window={args.f0_smooth}ms, boundaries={[round(b,3) for b in btimes]})")
+            if args.play:
+                import subprocess
+                subprocess.run(["afplay", str(smooth_path)])
+        elif args.play:
             import subprocess
             subprocess.run(["afplay", str(merged_path)])
     elif len(chunk_wavs) == 1:
