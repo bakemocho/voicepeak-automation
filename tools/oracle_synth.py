@@ -251,6 +251,8 @@ def main() -> int:
     parser.add_argument("--full-oracle", action="store_true",
                         help="Also synthesize full sentence as one Irodori pass; use stable-ts "
                              "to derive gap_after_ms from silence at chunk boundaries")
+    parser.add_argument("--gap-min-ms", type=int, default=150, metavar="MS",
+                        help="Minimum gap between chunks in ms (clamps oracle-derived gaps, default: 150)")
     args = parser.parse_args()
 
     if args.chunks:
@@ -349,6 +351,8 @@ def main() -> int:
     if args.full_oracle and len(chunks) > 1:
         if full_oracle_result and full_oracle_result.get("ok"):
             oracle_gaps = _derive_gaps_from_full_oracle(full_wav, len(chunks))
+            if args.gap_min_ms > 0:
+                oracle_gaps = [max(g, args.gap_min_ms) for g in oracle_gaps]
             sys.stderr.write(f"[oracle] gaps from full oracle: {oracle_gaps}\n")
         else:
             sys.stderr.write("[oracle] full-oracle synthesis failed, using MeCab gaps\n")
