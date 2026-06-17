@@ -18,6 +18,7 @@ run/
 logs/
 output/
 tmp/
+main_transcribe_*.log
 
 # IDE
 .vscode/
