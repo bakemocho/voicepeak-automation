@@ -66,15 +66,25 @@ def merge_wavs(
     chunk_paths: list[Path],
     sr: int,
     crossfade_ms: int,
+    gap_ms: int = 0,
 ) -> np.ndarray:
-    """Crossfade-merge pre-trimmed chunk WAVs into a single array."""
+    """Crossfade-merge pre-trimmed chunk WAVs into a single array.
+
+    gap_ms: silence inserted between chunks (before crossfade).
+    When gap_ms > 0, silence is appended to each chunk before the next
+    chunk blends in via crossfade.
+    """
     arrays = []
     for p in chunk_paths:
         y, _ = librosa.load(str(p), sr=sr, mono=True)
         arrays.append(y)
 
+    gap = np.zeros(int(gap_ms / 1000 * sr), dtype=np.float32)
+
     merged = arrays[0]
     for nxt in arrays[1:]:
+        if len(gap) > 0:
+            merged = np.concatenate([merged, gap])
         merged = _crossfade(merged, nxt, sr, crossfade_ms)
     return merged
 
@@ -101,6 +111,8 @@ def main() -> int:
     parser.add_argument("--narrator", default="Koharu Rikka", help="VOICEPEAK narrator")
     parser.add_argument("--crossfade-ms", type=int, default=20, metavar="MS",
                         help="Crossfade duration in ms (default: 20)")
+    parser.add_argument("--gap-ms", type=int, default=0, metavar="MS",
+                        help="Silence gap between chunks in ms (default: 0)")
     parser.add_argument("--baseline", action="store_true",
                         help="Also synthesize a single-call baseline for comparison")
     parser.add_argument("--dry-run", action="store_true",
@@ -189,10 +201,11 @@ def main() -> int:
     # --- Merge ---
     if len(chunk_wavs) >= 2:
         sr = sr_detected or 44100
-        merged = merge_wavs(chunk_wavs, sr, args.crossfade_ms)
+        merged = merge_wavs(chunk_wavs, sr, args.crossfade_ms, args.gap_ms)
         merged_path = args.out_dir / "merged.wav"
         sf.write(str(merged_path), merged, sr)
-        print(f"\nmerged → {merged_path}  ({len(merged)/sr:.2f}s, crossfade={args.crossfade_ms}ms)")
+        gap_info = f", gap={args.gap_ms}ms" if args.gap_ms else ""
+        print(f"\nmerged → {merged_path}  ({len(merged)/sr:.2f}s, crossfade={args.crossfade_ms}ms{gap_info})")
         if args.play:
             import subprocess
             subprocess.run(["afplay", str(merged_path)])
