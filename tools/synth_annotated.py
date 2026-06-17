@@ -31,6 +31,36 @@ VOICEPEAK_BIN = "/Applications/voicepeak.app/Contents/MacOS/voicepeak"
 _SPEED_SCALE = 100   # multiply annotation speed by this
 _PITCH_SCALE = 10    # multiply annotation pitch by this (semitone → VOICEPEAK units)
 
+# Generic emotion → narrator-specific emotion mapping.
+# Generic labels from LLM: happy, sad, angry, calm, excited, fearful, disgusted, surprised
+# Query narrator-specific labels: voicepeak --list-emotion "<narrator>"
+_EMOTION_MAP: dict[str, dict[str, str]] = {
+    "Koharu Rikka": {
+        "happy":     "hightension",
+        "excited":   "hightension",
+        "surprised": "hightension",
+        "sad":       "lamenting",
+        "fearful":   "lamenting",
+        "angry":     "livid",
+        "disgusted": "despising",
+        "calm":      "narration",
+        "neutral":   "narration",
+    },
+}
+_EMOTION_MAP_DEFAULT = {
+    "happy": "happy", "sad": "sad", "angry": "angry", "calm": "calm",
+}
+
+
+def _map_emotions(emotion: dict[str, float], narrator: str) -> dict[str, float]:
+    """Translate generic emotion labels to narrator-specific ones, combining duplicates."""
+    mapping = _EMOTION_MAP.get(narrator, _EMOTION_MAP_DEFAULT)
+    out: dict[str, float] = {}
+    for generic, val in emotion.items():
+        specific = mapping.get(generic, generic)
+        out[specific] = max(out.get(specific, 0.0), val)
+    return out
+
 
 def _emotion_arg(emotion: dict[str, float]) -> str | None:
     """Convert {happy: 0.5, sad: 0.2} → 'happy=50,sad=20'. Returns None if all zero."""
@@ -61,7 +91,8 @@ def synthesize_one(
         cmd += ["--pitch", str(pitch_int)]
 
     if emotion:
-        em_arg = _emotion_arg(emotion)
+        mapped = _map_emotions(emotion, narrator)
+        em_arg = _emotion_arg(mapped)
         if em_arg:
             cmd += ["--emotion", em_arg]
 
@@ -97,7 +128,8 @@ def main() -> int:
         pitch = entry.get("pitch", 0.0)
         wav = args.out_dir / f"{i+1:03d}.wav"
 
-        em_arg = _emotion_arg(emotion) if emotion else None
+        mapped_emotion = _map_emotions(emotion, args.narrator) if emotion else {}
+        em_arg = _emotion_arg(mapped_emotion) if mapped_emotion else None
         speed_int = max(50, min(200, round(speed * _SPEED_SCALE)))
         pitch_int = max(-300, min(300, round(pitch * _PITCH_SCALE)))
 
