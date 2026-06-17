@@ -162,6 +162,8 @@ def main() -> int:
             record["speed"] = speed_int
         if pitch_int != 0:
             record["pitch"] = pitch_int
+        if "scene_mode" in entry:
+            record["scene_mode"] = entry["scene_mode"]
         manifest.append(record)
 
     manifest_path = args.out_dir / "manifest.json"
