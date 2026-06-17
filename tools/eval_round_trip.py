@@ -35,11 +35,13 @@ def synthesize(text: str, narrator: str, out_wav: Path) -> bool:
 
 
 def transcribe(wav_path: Path, out_dir: Path) -> str | None:
+    # Run mjo from /tmp so its log files never land in the calling repo's CWD.
     proc = subprocess.run(
         ["zsh", "-ic", f"mjo {wav_path} --output-dir {out_dir} --language ja"],
         capture_output=True,
         text=True,
         timeout=180,
+        cwd="/tmp",
     )
     stdout = proc.stdout
     # mjo stdout: log lines, then one JSON object, then one more log line.
