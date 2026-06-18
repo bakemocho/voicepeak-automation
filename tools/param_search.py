@@ -33,6 +33,9 @@ import soundfile as sf
 _tools_dir = Path(__file__).parent
 sys.path.insert(0, str(_tools_dir))
 from synth_annotated import synthesize_one  # noqa: E402
+from score_wav import score_expressiveness  # noqa: E402
+
+_VENV_EVAL_PYTHON = _tools_dir.parent / ".venv-eval" / "bin" / "python"
 
 TOP_DB = 40
 CROSSFADE_MS = 30
@@ -111,13 +114,43 @@ def _merge(chunk_wavs: list[Path], chunks: list[dict], sr: int) -> np.ndarray:
     return merged
 
 
+def _score_candidate(wav_path: Path) -> dict:
+    """Score a merged WAV with expressiveness (always) and UTMOS (if venv-eval exists)."""
+    scores: dict = {}
+    try:
+        expr = score_expressiveness(wav_path)
+        scores["expr_score"] = expr["expr_score"]
+        scores["f0_range_st"] = expr["f0_range_st"]
+    except Exception as e:
+        sys.stderr.write(f"  [score] expr failed: {e}\n")
+
+    if _VENV_EVAL_PYTHON.exists():
+        try:
+            proc = subprocess.run(
+                [str(_VENV_EVAL_PYTHON), str(_tools_dir / "score_wav.py"),
+                 "--mos-only", "--json", str(wav_path)],
+                capture_output=True, text=True, timeout=120,
+            )
+            if proc.returncode == 0:
+                # stdout may contain model-load messages before the JSON line
+                last_line = proc.stdout.strip().splitlines()[-1]
+                scores["mos"] = json.loads(last_line)["mos"]
+        except Exception as e:
+            sys.stderr.write(f"  [score] mos failed: {e}\n")
+
+    return scores
+
+
 def _show_table(candidates: list[dict], baseline: list[dict]) -> None:
     n_chunks = len(baseline)
-    # Header
     chunk_labels = "  ".join(f"C{i+1}" for i in range(n_chunks))
-    print(f"\n  {'#':>4}  {'seed':>6}  {chunk_labels}")
+    has_mos = any("mos" in c.get("scores", {}) for c in candidates)
+    score_hdr = "  MOS  expr" if has_mos else "  expr"
+
+    print(f"\n  {'#':>4}  {'seed':>6}  {chunk_labels}{score_hdr}")
     print(f"  {'':>4}  {'':>6}  " + "  ".join(f"{'lam/spd/pit':11s}" for _ in range(n_chunks)))
-    print("  " + "─" * (14 + 13 * n_chunks))
+    print("  " + "─" * (14 + 13 * n_chunks + (14 if has_mos else 7)))
+
     # Baseline row
     row = "  ".join(
         f"{c.get('emotion',{}).get('lamenting',0):.2f}/{c.get('speed',1):.2f}/{c.get('pitch',0):+.2f}"
@@ -125,7 +158,18 @@ def _show_table(candidates: list[dict], baseline: list[dict]) -> None:
     )
     print(f"  {'base':>4}  {'':>6}  {row}")
     print()
+
     # Candidate rows
+    best_k = None
+    best_mos = -1.0
+    for k, cand in enumerate(candidates):
+        if not cand.get("ok"):
+            continue
+        sc = cand.get("scores", {})
+        mos = sc.get("mos")
+        if mos is not None and mos > best_mos:
+            best_mos, best_k = mos, k
+
     for k, cand in enumerate(candidates):
         chunks = cand["chunks"]
         seed = cand["seed"]
@@ -134,9 +178,20 @@ def _show_table(candidates: list[dict], baseline: list[dict]) -> None:
             for c in chunks
         )
         dur = cand.get("duration_s", 0)
-        ok = "ok" if cand.get("ok") else "FAIL"
-        print(f"  {k+1:>4}  {seed:>6}  {row}  ({dur:.1f}s {ok})")
+        ok_s = "ok" if cand.get("ok") else "FAIL"
+        sc = cand.get("scores", {})
+        score_s = ""
+        if has_mos:
+            mos_s = f"{sc['mos']:.3f}" if "mos" in sc else "  — "
+            score_s = f"  {mos_s}"
+        if "expr_score" in sc:
+            score_s += f"  {sc['expr_score']:.3f}"
+        marker = " ★" if k == best_k else ""
+        print(f"  {k+1:>4}  {seed:>6}  {row}  ({dur:.1f}s {ok_s}){score_s}{marker}")
     print()
+    if best_k is not None:
+        print(f"  Best by MOS: cand {best_k+1}  (MOS={best_mos:.3f})")
+        print()
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
@@ -200,6 +255,18 @@ def cmd_generate(args: argparse.Namespace) -> None:
             cand["duration_s"] = round(len(merged) / sr, 2)
             print(f"  cand {k+1:02d} → {merged_path}  ({cand['duration_s']}s)")
 
+    # Score each successful candidate
+    ok_cands = [c for c in candidates if c.get("ok")]
+    if ok_cands:
+        sys.stderr.write(f"\n  [score] scoring {len(ok_cands)} candidates...\n")
+        for cand in ok_cands:
+            wav = Path(cand["merged_wav"])
+            cand["scores"] = _score_candidate(wav)
+            sc = cand["scores"]
+            mos_s = f"MOS={sc['mos']:.3f}" if "mos" in sc else ""
+            expr_s = f"expr={sc.get('expr_score','?')}"
+            sys.stderr.write(f"  [score] cand seed={cand['seed']}  {mos_s}  {expr_s}\n")
+
     # Save manifest
     manifest = {"baseline": str(args.chunks), "candidates": candidates, "ranges": ranges}
     manifest_path = args.out_dir / "manifest.json"
@@ -207,7 +274,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
     _show_table(candidates, baseline)
     print(f"manifest → {manifest_path}")
-    print("next: --play K  or  --adopt K")
+    print("next: --adopt K")
 
 
 def cmd_play(args: argparse.Namespace) -> None:
