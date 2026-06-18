@@ -46,8 +46,9 @@ _J11_CAPTION = "若すぎない僕っこ女性キャラクターの声。少し�
 _J11_CHECKPOINT = "Aratako/Irodori-TTS-600M-v3-VoiceDesign"
 
 # F0 mapping constants
-_F0_RANGE_SATURATE_ST = 10.0   # semitone range → emotion 1.0
-_PITCH_SCALE_ST = 3.0           # ±3 st deviation caps pitch at ±1.0
+_F0_RANGE_SATURATE_ST = 10.0    # semitone range → emotion 1.0
+_PITCH_SCALE_ST = 3.0            # ±3 st deviation caps pitch at ±1.0 (median mode)
+_PITCH_ONSET_SCALE_ST = 6.0      # wider range for onset F0 (higher variance than median)
 
 
 def _derive_gaps_from_full_oracle(full_wav: Path, n_chunks: int) -> list[int]:
@@ -134,12 +135,14 @@ def _f0_to_voicepeak_params(
     f0_range_max: float | None = None,
     emotion_floor: float = 0.0,
     use_onset_pitch: bool = False,
+    pitch_scale_st: float = _PITCH_SCALE_ST,
 ) -> dict:
     """Map oracle F0 stats to VOICEPEAK annotation params.
 
     f0_range_max: when set, normalizes relative to this max (--f0-relative).
     emotion_floor: minimum intensity after normalization (--emotion-floor).
     use_onset_pitch: use f0_onset_midi (phrase-initial F0) for pitch mapping.
+    pitch_scale_st: ± semitone deviation that maps to ±1.0 pitch annotation.
     """
     f0_range = stats.get("f0_range_st", 0.0)
     f0_midi = stats.get("f0_median_midi", global_f0_median_midi)
@@ -153,13 +156,13 @@ def _f0_to_voicepeak_params(
         intensity = min(f0_range / _F0_RANGE_SATURATE_ST, 1.0)
         intensity = max(intensity, emotion_floor)
 
-    # pitch offset: semitone deviation from global median, capped at ±_PITCH_SCALE_ST
+    # pitch offset: semitone deviation from global median, capped at ±pitch_scale_st
     if use_onset_pitch and "f0_onset_midi" in stats:
         pitch_ref_midi = stats["f0_onset_midi"]
     else:
         pitch_ref_midi = f0_midi
     pitch_dev_st = pitch_ref_midi - global_f0_median_midi
-    pitch_offset = float(np.clip(pitch_dev_st / _PITCH_SCALE_ST, -1.0, 1.0))
+    pitch_offset = float(np.clip(pitch_dev_st / pitch_scale_st, -1.0, 1.0))
 
     return {
         "emotion": {base_emotion_type: round(intensity, 3)},
@@ -286,6 +289,9 @@ def main() -> int:
                         help="Minimum gap between chunks in ms (clamps oracle-derived gaps, default: 150)")
     parser.add_argument("--pitch-onset-ms", type=float, default=0.0, metavar="MS",
                         help="Use first MS of each oracle WAV for pitch mapping (phrase-initial F0); 0=off")
+    parser.add_argument("--pitch-onset-scale-st", type=float, default=_PITCH_ONSET_SCALE_ST, metavar="ST",
+                        help=f"Pitch scale (semitones → ±1.0) when --pitch-onset-ms is active "
+                             f"(default: {_PITCH_ONSET_SCALE_ST}; wider than median mode {_PITCH_SCALE_ST})")
     args = parser.parse_args()
 
     if args.chunks:
@@ -403,10 +409,22 @@ def main() -> int:
             f"floor={args.emotion_floor}\n"
         )
 
+    use_onset = args.pitch_onset_ms > 0
+    pitch_scale = args.pitch_onset_scale_st if use_onset else _PITCH_SCALE_ST
+    if use_onset:
+        sys.stderr.write(
+            f"[oracle] pitch-onset mode: scale={pitch_scale:.1f}st "
+            f"(onset window={args.pitch_onset_ms:.0f}ms)\n"
+        )
+
     result_chunks = []
     for i, (entry, stats) in enumerate(zip(chunks, stats_list)):
         updated = dict(entry)
-        vp_params = _f0_to_voicepeak_params(stats, global_f0_midi, args.emotion_type, f0_range_max=f0_range_max, emotion_floor=args.emotion_floor, use_onset_pitch=args.pitch_onset_ms > 0)
+        vp_params = _f0_to_voicepeak_params(
+            stats, global_f0_midi, args.emotion_type,
+            f0_range_max=f0_range_max, emotion_floor=args.emotion_floor,
+            use_onset_pitch=use_onset, pitch_scale_st=pitch_scale,
+        )
 
         # Override emotion intensity; keep user-set type if different from emotion_type
         updated["emotion"] = vp_params["emotion"]
@@ -427,7 +445,7 @@ def main() -> int:
             updated["_oracle"]["oracle_wav"] = stats["oracle_wav"]
 
         onset_hz = stats.get("f0_onset_hz")
-        onset_str = f"  onset={onset_hz:.0f}Hz" if onset_hz else ""
+        onset_str = f"  onset={onset_hz:.0f}Hz" if (use_onset and onset_hz) else ""
         sys.stderr.write(
             f"  [{i+1:03d}] {entry['text']!r:30s}"
             f"  F0={stats.get('f0_median_hz', 0):.0f}Hz"
