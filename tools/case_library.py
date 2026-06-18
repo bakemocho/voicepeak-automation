@@ -12,10 +12,12 @@ Usage:
         --scene-mode dramatic_fear \\
         --narrator "Koharu Rikka" \\
         --mos 2.47 \\
-        --source "param_search param-search-004 cand1"
+        --source "param_search param-search-004 cand1" \\
+        --notes "chunk3が平坦だったのでlam 0.5→0.9に。指示: もっと怖そうに、足がすくむ感じで"
 
-    # Search by keyword (checks situation + scene_mode)
+    # Search by keyword (checks situation + scene_mode + notes)
     python tools/case_library.py search "主人公 恐怖"
+    python tools/case_library.py search "もっと怖そう"
 
     # Filter by scene_mode
     python tools/case_library.py search --scene-mode dramatic_fear
@@ -82,7 +84,11 @@ def _match(case: dict, tokens: list[str], scene_mode: str | None, narrator: str 
     if narrator and case.get("narrator", "").lower() != narrator.lower():
         return False
     if tokens:
-        haystack = (case.get("situation", "") + " " + case.get("scene_mode", "")).lower()
+        haystack = " ".join([
+            case.get("situation", ""),
+            case.get("scene_mode", ""),
+            case.get("notes", ""),
+        ]).lower()
         return all(t.lower() in haystack for t in tokens)
     return True
 
@@ -91,11 +97,14 @@ def _fmt_case(case: dict, verbose: bool = False) -> str:
     mos_s = f"MOS={case['mos']:.3f}" if "mos" in case else "MOS=—"
     n_chunks = len(case.get("chunks", []))
     src = case.get("source", "")
+    notes = case.get("notes", "")
     line = (
         f"  {case['id']}  [{case.get('scene_mode','—'):20s}]  {mos_s}  "
         f"{n_chunks}chunks  {case.get('date','—')}\n"
         f"    {case.get('situation','')}"
     )
+    if notes:
+        line += f"\n    notes: {notes}"
     if verbose and src:
         line += f"\n    source: {src}"
     return line
@@ -119,6 +128,8 @@ def cmd_add(args: argparse.Namespace) -> None:
         case["mos"] = round(args.mos, 4)
     if args.source:
         case["source"] = args.source
+    if args.notes:
+        case["notes"] = args.notes
 
     _save_append(lib, case)
     print(f"added: {case_id}  →  {lib}")
@@ -127,6 +138,8 @@ def cmd_add(args: argparse.Namespace) -> None:
     print(f"  chunks    : {len(chunks)}")
     if args.mos is not None:
         print(f"  MOS       : {args.mos:.3f}")
+    if args.notes:
+        print(f"  notes     : {args.notes}")
 
 
 def cmd_search(args: argparse.Namespace) -> None:
@@ -200,6 +213,7 @@ def main() -> int:
     p_add.add_argument("--narrator", default="Koharu Rikka")
     p_add.add_argument("--mos", type=float, help="MOS score if known")
     p_add.add_argument("--source", help="Provenance note e.g. 'param_search param-search-004 cand1'")
+    p_add.add_argument("--notes", help="Editorial notes: correction history, instructions given, what was wrong")
 
     # search
     p_search = sub.add_parser("search", help="Search cases by keyword / tag")
