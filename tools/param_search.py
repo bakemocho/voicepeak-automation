@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import time
+
 import librosa
 import numpy as np
 import soundfile as sf
@@ -74,14 +76,20 @@ def _perturb_chunk(entry: dict, rng: random.Random, ranges: dict) -> dict:
     return c
 
 
-def _trim_synth(entry: dict, wav_path: Path, narrator: str) -> bool:
+def _trim_synth(entry: dict, wav_path: Path, narrator: str, retries: int = 1) -> bool:
     raw = wav_path.parent / f"_raw_{wav_path.stem}.wav"
-    ok = synthesize_one(
-        entry["text"], raw, narrator,
-        entry.get("emotion", {}),
-        entry.get("speed", 1.0),
-        entry.get("pitch", 0.0),
-    )
+    for attempt in range(1 + retries):
+        if attempt > 0:
+            sys.stderr.write(f"  [retry {attempt}] {entry['text']!r}\n")
+            time.sleep(1.0)
+        ok = synthesize_one(
+            entry["text"], raw, narrator,
+            entry.get("emotion", {}),
+            entry.get("speed", 1.0),
+            entry.get("pitch", 0.0),
+        )
+        if ok:
+            break
     if not ok:
         return False
     y, sr = librosa.load(str(raw), sr=None, mono=True)

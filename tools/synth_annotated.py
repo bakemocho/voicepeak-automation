@@ -97,7 +97,13 @@ def synthesize_one(
             cmd += ["--emotion", em_arg]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    return out_wav.exists()
+    if not out_wav.exists():
+        sys.stderr.write(
+            f"[vp] FAIL rc={proc.returncode}  cmd={cmd[3:]}\n"
+            f"[vp] stderr tail: {proc.stderr[-300:].strip()}\n"
+        )
+        return False
+    return True
 
 
 def main() -> int:
