@@ -110,6 +110,38 @@ def _fmt_case(case: dict, verbose: bool = False) -> str:
     return line
 
 
+def add_case(
+    chunks: list[dict],
+    situation: str,
+    narrator: str = "Koharu Rikka",
+    scene_mode: str = "",
+    notes: str = "",
+    mos: float | None = None,
+    source: str = "",
+    library: Path | None = None,
+) -> str:
+    """Add a case programmatically. Returns the assigned case ID."""
+    lib = library or _DEFAULT_LIBRARY
+    cases = _load(lib)
+    case_id = _next_id(cases)
+    case: dict = {
+        "id": case_id,
+        "date": date.today().isoformat(),
+        "situation": situation,
+        "scene_mode": scene_mode,
+        "narrator": narrator,
+        "chunks": chunks,
+    }
+    if mos is not None:
+        case["mos"] = round(mos, 4)
+    if source:
+        case["source"] = source
+    if notes:
+        case["notes"] = notes
+    _save_append(lib, case)
+    return case_id
+
+
 def cmd_add(args: argparse.Namespace) -> None:
     lib = _library_path(args)
     chunks = json.loads(args.chunks.read_text(encoding="utf-8"))

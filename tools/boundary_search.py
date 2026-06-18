@@ -40,6 +40,7 @@ _tools_dir = Path(__file__).parent
 sys.path.insert(0, str(_tools_dir))
 from synth_annotated import synthesize_one  # noqa: E402
 from score_wav import score_expressiveness  # noqa: E402
+from case_library import add_case, _DEFAULT_LIBRARY as _CASE_LIBRARY_DEFAULT  # noqa: E402
 
 _VENV_EVAL_PYTHON = _tools_dir.parent / ".venv-eval" / "bin" / "python"
 
@@ -356,10 +357,33 @@ def cmd_adopt(args: argparse.Namespace) -> None:
     print(f"adopted variant {args.adopt} → {out_path}")
     print(f"boundary: {_config_label(v['config'])}")
     print(f"use as next baseline: --chunks {out_path}")
-    if "scores" in v:
-        sc = v["scores"]
-        if "mos" in sc:
-            print(f"MOS: {sc['mos']:.3f}")
+
+    mos = v.get("scores", {}).get("mos")
+    if mos is not None:
+        print(f"MOS: {mos:.3f}")
+
+    # Save to case library if --situation provided
+    if getattr(args, "situation", None):
+        case_id = add_case(
+            chunks=v["chunks"],
+            situation=args.situation,
+            narrator=getattr(args, "narrator", "Koharu Rikka"),
+            scene_mode=getattr(args, "scene_mode", "") or "",
+            notes=getattr(args, "notes", "") or "",
+            mos=mos,
+            source=f"boundary_search {_config_label(v['config'])}",
+            library=getattr(args, "library", None),
+        )
+        print(f"saved to case library: {case_id}")
+    else:
+        mos_flag = f" --mos {mos:.3f}" if mos is not None else ""
+        print(
+            f"\nhint: save to case library:\n"
+            f"  python tools/case_library.py add \\\n"
+            f"    --chunks {out_path} \\\n"
+            f"    --situation \"<シーン説明>\"{mos_flag} \\\n"
+            f"    --notes \"<修正の経緯・指示>\""
+        )
 
 
 def main() -> int:
@@ -372,6 +396,13 @@ def main() -> int:
     parser.add_argument("--play", type=int, metavar="K", help="Play variant K")
     parser.add_argument("--adopt", type=int, metavar="K", help="Adopt variant K as new baseline")
     parser.add_argument("--show", action="store_true", help="Show table from existing manifest")
+
+    # Case library options (used with --adopt)
+    parser.add_argument("--situation", help="Save adopted case to library with this situation description")
+    parser.add_argument("--scene-mode", help="scene_mode tag for case library (e.g. dramatic_fear)")
+    parser.add_argument("--notes", help="Correction history / instructions for case library")
+    parser.add_argument("--library", type=Path, default=_CASE_LIBRARY_DEFAULT,
+                        help="Case library path (default: case_library/cases.jsonl)")
 
     args = parser.parse_args()
 
