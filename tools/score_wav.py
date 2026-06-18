@@ -124,11 +124,14 @@ def score_expressiveness(wav_path: str | Path) -> dict[str, float]:
     Higher values = more dynamic / expressive delivery.
 
     Returns:
-        f0_range_st   : F0 range in semitones (voiced frames only)
-        f0_cv         : F0 coefficient of variation (std/mean, voiced only)
-        energy_cv     : RMS energy coefficient of variation (per 20ms frame)
-        speaking_rate : estimated syllables/second (energy-peak based)
-        expr_score    : composite 0–1 (normalised weighted sum)
+        f0_range_st    : F0 range in semitones (voiced frames only)
+        f0_cv          : F0 coefficient of variation (std/mean, voiced only)
+        f0_voiced_ratio: fraction of frames that are voiced
+        f0_octave_jumps: count of consecutive-voiced-frame F0 jumps > 6 semitones
+                         (high values indicate pyin octave errors or synthesis artifacts)
+        energy_cv      : RMS energy coefficient of variation (per 20ms frame)
+        speaking_rate  : estimated syllables/second (energy-peak based)
+        expr_score     : composite 0–1 (normalised weighted sum)
     """
     import librosa
     import numpy as np
@@ -142,14 +145,19 @@ def score_expressiveness(wav_path: str | Path) -> dict[str, float]:
         sr=sr, frame_length=2048,
     )
     voiced_f0 = f0[voiced_flag & ~np.isnan(f0)]
+    f0_voiced_ratio = float(np.sum(voiced_flag)) / len(voiced_flag) if len(voiced_flag) > 0 else 0.0
     if len(voiced_f0) > 2:
         f0_hz_mean = float(np.mean(voiced_f0))
         f0_hz_std  = float(np.std(voiced_f0))
         f0_cv      = f0_hz_std / f0_hz_mean if f0_hz_mean > 0 else 0.0
         # Convert range to semitones: 12 * log2(max/min)
         f0_range_st = float(12 * np.log2(np.max(voiced_f0) / np.min(voiced_f0))) if np.min(voiced_f0) > 0 else 0.0
+        # Octave jump detection: consecutive voiced-frame F0 diff > 6 semitones
+        # Catches pyin octave errors and synthesis pitch instability
+        f0_diffs_st = np.abs(12 * np.log2(voiced_f0[1:] / voiced_f0[:-1] + 1e-9))
+        f0_octave_jumps = int(np.sum(f0_diffs_st > 6.0))
     else:
-        f0_cv, f0_range_st = 0.0, 0.0
+        f0_cv, f0_range_st, f0_octave_jumps = 0.0, 0.0, 0
 
     # RMS energy per frame (~20ms)
     hop = 512
@@ -179,11 +187,13 @@ def score_expressiveness(wav_path: str | Path) -> dict[str, float]:
     ))
 
     return {
-        "f0_range_st":   round(f0_range_st, 2),
-        "f0_cv":         round(f0_cv, 3),
-        "energy_cv":     round(energy_cv, 3),
-        "speaking_rate": round(speaking_rate, 2),
-        "expr_score":    round(expr_score, 3),
+        "f0_range_st":     round(f0_range_st, 2),
+        "f0_cv":           round(f0_cv, 3),
+        "f0_voiced_ratio": round(f0_voiced_ratio, 3),
+        "f0_octave_jumps": f0_octave_jumps,
+        "energy_cv":       round(energy_cv, 3),
+        "speaking_rate":   round(speaking_rate, 2),
+        "expr_score":      round(expr_score, 3),
     }
 
 
@@ -251,6 +261,9 @@ def main() -> int:
         if "expr_score" in result:
             print(f"Expressiveness:    {result['expr_score']:.3f}  [0–1, composite]")
             print(f"  F0 range:        {result['f0_range_st']:.1f} st  CV={result['f0_cv']:.3f}")
+            print(f"  Voiced ratio:    {result['f0_voiced_ratio']:.3f}")
+            octave_warn = "  ← pyin artifact?" if result['f0_octave_jumps'] > 2 else ""
+            print(f"  Octave jumps:    {result['f0_octave_jumps']}{octave_warn}")
             print(f"  Energy CV:       {result['energy_cv']:.3f}")
             print(f"  Speaking rate:   {result['speaking_rate']:.1f} syl/s")
     return 0
