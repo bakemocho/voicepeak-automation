@@ -24,3 +24,4 @@ main_transcribe_*.log
 .vscode/
 .idea/
 .venv-eval/
+case_library/
