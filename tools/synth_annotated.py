@@ -21,7 +21,13 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+try:
+    from vp_call_logger import record as _vp_log
+except ImportError:
+    _vp_log = None  # type: ignore[assignment]
 
 VOICEPEAK_BIN = "/Applications/voicepeak.app/Contents/MacOS/voicepeak"
 
@@ -96,11 +102,36 @@ def synthesize_one(
         if em_arg:
             cmd += ["--emotion", em_arg]
 
+    import time as _time
+    t0 = _time.monotonic()
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    if not out_wav.exists():
+    call_end_epoch = _time.time()
+    duration_ms = int((_time.monotonic() - t0) * 1000)
+    ok = out_wav.exists()
+
+    if _vp_log is not None:
+        em_arg_logged = None
+        for j, part in enumerate(cmd):
+            if part == "--emotion" and j + 1 < len(cmd):
+                em_arg_logged = cmd[j + 1]
+        _vp_log(
+            ok=ok,
+            rc=proc.returncode,
+            duration_ms=duration_ms,
+            call_end_epoch=call_end_epoch,
+            text=text,
+            narrator=narrator,
+            speed_int=speed_int,
+            pitch_int=pitch_int,
+            emotion_arg=em_arg_logged,
+            out_path=str(out_wav),
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
+
+    if not ok:
         sys.stderr.write(
-            f"[vp] FAIL rc={proc.returncode}  cmd={cmd[3:]}\n"
-            f"[vp] stderr tail: {proc.stderr[-300:].strip()}\n"
+            f"[vp] FAIL rc={proc.returncode} {duration_ms}ms  {text!r}\n"
         )
         return False
     return True
