@@ -37,11 +37,12 @@ Usage:
         --notes "boundary_search+param_search自動選択"
 
 Stages:
-  1. annotate  — split text + LLM annotation → initial chunks.json
-  2. boundary  — merge-adjacent variants → pick best MOS boundary
-  3. params    — random perturbation candidates → pick best MOS params
-  4. final     — write final.wav + final_chunks.json
-  5. library   — save to case_library (if --situation given)
+  1.   annotate  — split text + LLM annotation → initial chunks.json
+  1.5. oracle    — Irodori-TTS F0 oracle → refine emotion/pitch (opt, --oracle)
+  2.   boundary  — merge-adjacent variants → pick best MOS boundary
+  3.   params    — random perturbation candidates → pick best MOS params
+  4.   final     — write final.wav + final_chunks.json
+  5.   library   — save to case_library (if --situation given)
 """
 from __future__ import annotations
 
@@ -119,6 +120,45 @@ def stage_annotate(args: argparse.Namespace, out_dir: Path) -> Path | None:
     chunks = json.loads(proc.stdout)
     sys.stderr.write(f"[pipeline] annotated → {len(chunks)} chunks  ({chunks_path})\n")
     return chunks_path
+
+
+# ---------------------------------------------------------------------------
+# Stage 1.5: Oracle prosody estimation
+# ---------------------------------------------------------------------------
+
+def stage_oracle(
+    chunks_path: Path,
+    out_dir: Path,
+    narrator: str,
+    oracle_mode: str = "no-ref",
+    oracle_steps: int = 40,
+    emotion_floor: float = 0.0,
+    f0_relative: bool = False,
+    full_oracle: bool = False,
+) -> Path | None:
+    oracle_dir = out_dir / "01b_oracle"
+    out_path = out_dir / "01b_oracle.json"
+    cmd = [_python, _tools_dir / "oracle_synth.py",
+           "--chunks", chunks_path,
+           "--out-dir", oracle_dir,
+           "--oracle-mode", oracle_mode,
+           "--narrator", narrator,
+           "--num-steps", str(oracle_steps),
+           "--out", out_path]
+    if emotion_floor > 0.0:
+        cmd += ["--emotion-floor", str(emotion_floor)]
+    if f0_relative:
+        cmd += ["--f0-relative"]
+    if full_oracle:
+        cmd += ["--full-oracle"]
+
+    ok = _run(cmd, "oracle_synth")
+    if not ok or not out_path.exists():
+        return None
+
+    chunks = json.loads(out_path.read_text(encoding="utf-8"))
+    sys.stderr.write(f"[pipeline] oracle → {len(chunks)} chunks updated  ({out_path})\n")
+    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +352,19 @@ def main() -> int:
                         help="Number of param_search candidates (default: 5)")
 
     # Stage control
+    parser.add_argument("--oracle", action="store_true",
+                        help="Enable oracle prosody estimation stage (Irodori-TTS; requires Irodori venv)")
+    parser.add_argument("--oracle-mode", default="no-ref",
+                        choices=["no-ref", "j11", "voicepeak"],
+                        help="Oracle mode: no-ref (plain Irodori), j11 (J11 anchor), voicepeak (VOICEPEAK ref)")
+    parser.add_argument("--oracle-steps", type=int, default=40,
+                        help="Irodori inference steps (default: 40; use 4 for smoke test)")
+    parser.add_argument("--oracle-emotion-floor", type=float, default=0.0, metavar="F",
+                        help="Minimum emotion intensity from oracle [0,1] (default: 0)")
+    parser.add_argument("--oracle-f0-relative", action="store_true",
+                        help="Normalize oracle F0 range relative to chunk max")
+    parser.add_argument("--oracle-full", action="store_true",
+                        help="Synthesize full sentence in one oracle pass for gap detection")
     parser.add_argument("--no-boundary", action="store_true",
                         help="Skip boundary_search stage")
     parser.add_argument("--no-params", action="store_true",
@@ -343,6 +396,25 @@ def main() -> int:
             return 1
         current_chunks = result
         stages_run.append("annotate")
+
+    # --- Stage 1.5: Oracle ---
+    if args.oracle:
+        _hdr("Stage 1.5: Oracle prosody estimation")
+        result = stage_oracle(
+            current_chunks, args.out_dir, args.narrator,
+            oracle_mode=args.oracle_mode,
+            oracle_steps=args.oracle_steps,
+            emotion_floor=args.oracle_emotion_floor,
+            f0_relative=args.oracle_f0_relative,
+            full_oracle=args.oracle_full,
+        )
+        if result is not None:
+            current_chunks = result
+            stages_run.append("oracle")
+        else:
+            sys.stderr.write("[pipeline] oracle stage failed — continuing with annotation chunks\n")
+    else:
+        sys.stderr.write("[pipeline] skipping oracle (--oracle not set)\n")
 
     # --- Stage 2: Boundary search ---
     if not args.no_boundary:
