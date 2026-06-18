@@ -54,14 +54,15 @@ SCENE_MODES = ("natural", "drama", "comedy")
 
 _SYSTEM_PROMPT_BASE = """\
 あなたはVOICEPEAK向けの音声台本アノテーターです。
-ユーザーから日本語の台本テキストを受け取り、各文のアノテーションをJSON配列で返します。
+ユーザーから日本語の台本テキストを受け取り、チャンク分割とアノテーションをJSON配列で返します。
 
 ## 出力フォーマット
 
 ```json
 [
   {{
-    "text": "元のテキスト（変更しない）",
+    "text": "チャンクのテキスト（統合した場合は連結テキスト）",
+    "source_sentences": [1, 2],
     "emotion": {{
       "happy": 0.0,
       "sad": 0.0,
@@ -75,6 +76,24 @@ _SYSTEM_PROMPT_BASE = """\
 ]
 ```
 
+## チャンクの統合ルール（重要）
+
+入力テキストはすでに文単位に分割されています。
+隣接する文を **1つのチャンクにまとめてよい** 条件：
+
+- 統合すべきケース：
+  - 感情が連続していて合計文字数が30字以内（例:「怖くて。」+「足が動かない。」）
+  - 途切れた発話の断片（「……」始まり + 直後の短文）
+  - 3字以下の超短文（「うん。」「え。」等）が後続文と一体感がある
+
+- 統合してはいけないケース：
+  - 感情・速度が明確に変わる境界
+  - 1文だけで20字以上ある
+  - 間（ポーズ）を強調する独立文
+
+`source_sentences`: 元の文番号（1始まり）のリスト。統合しない場合は単一要素 `[N]`。
+`text`: 統合した場合は各文を連結したテキスト（入力テキストをそのまま使う、変更しない）。
+
 ## シーンモード: {mode_name}
 
 {mode_rules}
@@ -82,12 +101,11 @@ _SYSTEM_PROMPT_BASE = """\
 ## 共通ルール
 
 - `speed`: 1.0 が標準。早口なら 1.2、ゆっくりなら 0.8 程度。
-- `pitch`: 0.0 が標準。高めなら +10〜20、低めなら -10〜-20（semitone単位）。
+- `pitch`: 0.0 が標準。高めなら +0.1〜+0.3、低めなら -0.1〜-0.3（annotation単位）。
 - `accent_corrections`: アクセント辞書で誤読されやすい固有名詞・複合語を指定。
   - `word`: 表層形（MeCabが分割する前の文字列）
   - `reading`: 読みのひらがな
   - `accent_type`: 0=平板、1=頭高、N=第N拍以降が低下
-- `text` は入力テキストをそのままコピー。絶対に変更しない。
 - JSON 配列のみ出力。説明文は不要。
 """
 
@@ -130,9 +148,18 @@ def _build_system_prompt(scene_mode: str) -> str:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """Split text on sentence-ending punctuation, keeping delimiter."""
-    parts = re.split(r"(?<=[。！？])", text.strip())
-    return [p.strip() for p in parts if p.strip()]
+    """Split text on sentence-ending punctuation or newlines."""
+    sentences = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = re.split(r"(?<=[。！？])", line)
+        for p in parts:
+            p = p.strip()
+            if p:
+                sentences.append(p)
+    return sentences
 
 
 def _extract_json_array(text: str) -> list:
@@ -145,7 +172,11 @@ def _extract_json_array(text: str) -> list:
 
 def _build_prompt(sentences: list[str]) -> str:
     user_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(sentences))
-    return f"以下の台本を文ごとにアノテーションしてください:\n\n{user_text}"
+    return (
+        f"以下の台本（{len(sentences)}文）をチャンク分割＋アノテーションしてください。\n"
+        f"必要なら隣接する文を1チャンクに統合し、source_sentencesに元の番号を示してください。\n\n"
+        f"{user_text}"
+    )
 
 
 def annotate_with_anthropic(
@@ -223,13 +254,14 @@ def annotate_dry_run(sentences: list[str], scene_mode: str = "natural") -> list[
     return [
         {
             "text": s,
+            "source_sentences": [i + 1],
             "scene_mode": scene_mode,
             "emotion": {"happy": 0.0, "sad": 0.0, "angry": 0.0, "calm": 0.0},
             "speed": 1.0,
             "pitch": 0.0,
             "accent_corrections": [],
         }
-        for s in sentences
+        for i, s in enumerate(sentences)
     ]
 
 
@@ -279,10 +311,18 @@ def main() -> int:
         result = annotate_with_llm(sentences, backend=args.backend, model=args.model, scene_mode=scene_mode)
         result = _inject_scene_mode(result, scene_mode)
 
-    # Validate: ensure every sentence is present
-    if len(result) != len(sentences):
+    # Validate coverage via source_sentences
+    covered: set[int] = set()
+    for entry in result:
+        for n in entry.get("source_sentences", []):
+            covered.add(n)
+    missing = [i + 1 for i in range(len(sentences)) if (i + 1) not in covered]
+    if covered and missing:
+        sys.stderr.write(f"[warn] sentences not covered by any chunk: {missing}\n")
+    elif not covered and len(result) != len(sentences):
         sys.stderr.write(
-            f"[warn] LLM returned {len(result)} items for {len(sentences)} sentences\n"
+            f"[warn] LLM returned {len(result)} chunks for {len(sentences)} sentences "
+            f"(no source_sentences field — old-format response)\n"
         )
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
